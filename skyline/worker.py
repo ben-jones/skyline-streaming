@@ -60,7 +60,15 @@ class Client():
         node's skyline
 
         """
-        pass
+        # update local skyline for each point from master
+        break_out = False
+        while (not break_out):
+            try:
+                data = self.in_q.get(10)
+                point = data['data']
+                self.update_skyline(point)
+            except Queue.Empty:
+                break_out = True
 
 
 def run_worker(infile, in_q, out_q):
