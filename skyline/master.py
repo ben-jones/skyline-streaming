@@ -45,6 +45,7 @@ class Master():
         self.non_skyline = []
         self.sky_received = 0
         self.unprocessed_sky = []
+        self.recv_workers = {}
 
         self.start_time = start_time
         self.window_time = start_time
@@ -71,7 +72,11 @@ class Master():
         try:
             # TODO: fill this in with the global skyline computation
             self.skyline = [self.step]
-            time.sleep(30)
+            # time.sleep(30)
+
+            self.unprocessed_sky = []
+            self.recv_workers = {}
+            self.sky_received = 0
         except (SystemExit, KeyboardInterrupt) as exp:
             raise(exp)
         except Exception:
@@ -102,6 +107,13 @@ class Master():
             while keep_running:
                 self.status_lock.acquire()
 
+                # if we are out of workers, then quit
+                if self.num_workers <= 0:
+                    print "Out of workers, so quitting"
+                    self.status_lock.release()
+                    keep_running = False
+                    continue
+
                 # if we don't have anything new, preempt until we have
                 # something. If we have waited more than the timeout
                 # period, then end
@@ -113,6 +125,7 @@ class Master():
                         self.status_lock.release()
                         keep_running = False
                         continue
+
                     self.status_lock.release()
                     time.sleep(MASTER_WAIT_TIME)
                     continue
@@ -144,6 +157,11 @@ class Master():
                 else:
                     self.status_lock.release()
                     continue
+            self.data_lock.acquire()
+            self.process_skyline()
+            # write out data from the final round
+            self.write_out_skyline()
+            self.data_lock.release()
 
         except (SystemExit, KeyboardInterrupt) as exp:
             raise(exp)
@@ -179,7 +197,8 @@ def check_status():
                'is_computing': data.is_computing,
                'is_waiting': data.is_waiting,
                'num_workers': data.num_workers,
-               'num_received': data.sky_received}
+               'num_received': data.sky_received,
+               'num_threads': threading.active_count()}
     data.status_lock.release()
     return flask.make_response(flask.jsonify(running), 200)
 
@@ -193,6 +212,18 @@ def get_step():
     return flask.make_response(flask.jsonify(step), 200)
 
 
+@app.route('/worker_done')
+def remove_worker():
+    """When a worker is done, reduce the count of the number of workers"""
+    # worker_id = flask.request.args.get('worker_id')
+    data.status_lock.acquire()
+    step = {'step': data.step, 'step_size': data.step_size,
+            'start_time': data.start_time, 'window_time': data.window_time}
+    data.num_workers -= 1
+    data.status_lock.release()
+    return flask.make_response(flask.jsonify(step), 200)
+
+
 @app.route('/get_skyline')
 @app.route('/get_skyline/<step>')
 def get_skyline(step=None):
@@ -200,28 +231,48 @@ def get_skyline(step=None):
     requested step is not available
 
     """
+    worker_id = flask.request.args.get('worker_id')
+
     try:
         data.status_lock.acquire()
         is_computing = data.is_computing
-        data_step = data.step
+        is_running = data.is_running
+        already_recv_worker = (worker_id in data.recv_workers)
+        proc_step = data.step - 1
     finally:
         data.status_lock.release()
+
+    if not is_running:
+        flask.abort(400)
+
+    # tell the worker that we are still computing with status code 423
+    # if a) we are currently computing the skyline or b) the worker
+    # has already given us data for the next time step
+    if is_computing:
+        error_json = flask.jsonify({'error': 'Data is locked for computation'})
+        return flask.make_response(error_json, 423)
 
     # if a specific timestep is requested, make sure that it is the
     # last time step
     if step is not None:
         step = int(step)
-        if step != (data_step - 1):
-            flask.abort(400)
+        if step != proc_step:
+            # if we already received data from this worker, then wait longer
+            if already_recv_worker:
+                error_json = flask.jsonify({'error':
+                                            'Data is locked for computation'})
+                return flask.make_response(error_json, 423)
 
-    # if we are in the middle of computing, return status code 423
-    if is_computing:
-        error_json = flask.jsonify({'error': 'Data is locked for computation'})
-        return flask.make_response(error_json, 423)
+            err_text = ("last processed step is {}, not {}"
+                        "".format(proc_step, step))
+            error_json = flask.jsonify({'status': 'error', 'error': err_text,
+                                        'step': proc_step})
+            return flask.make_response(error_json, 400)
 
     # otherwise return the latest skyline
     data.data_lock.acquire()
-    sky = {'step': (data.step - 1), 'data': data.skyline}
+    # sky = {'step': (data.step - 1), 'data': data.skyline}
+    sky = {'step': (data.step - 1), 'data': data.unprocessed_sky}
     data.data_lock.release()
     return flask.make_response(flask.jsonify(sky), 200)
 
@@ -253,6 +304,7 @@ def accept_data():
     data.data_lock.acquire()
     data.unprocessed_sky.append(local_skyline)
     data.sky_received += 1
+    data.recv_workers[local_skyline['worker_id']] = True
     data.data_lock.release()
 
     data.status_lock.acquire()

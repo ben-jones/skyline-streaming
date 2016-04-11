@@ -16,6 +16,8 @@
 # stlib imports
 import argparse
 import json
+import random
+import string
 import time
 
 
@@ -28,11 +30,25 @@ from constants import WORKER_REQUERIES, WORKER_MASTER_WAIT, SERVER_TIMEOUT
 from constants import SERVER_REQUERIES
 
 
+# constants
+UPLOAD_WAIT = 5
+
+
+def create_nonce(length):
+    letters = [random.choice(string.letters) for x in range(length)]
+    nonce = "".join(letters)
+    return nonce
+
+
 class Worker():
     def __init__(self, infile, master, process_line=None):
         self.infile = infile
         self.inputf = open(infile, 'r')
         self.master_url = master
+
+        # TODO: uncomment this
+        self.worker_id = "test"
+        # self.worker_id = create_nonce(10)
 
         self.process_line = json.loads
         if process_line is not None:
@@ -77,21 +93,33 @@ class Worker():
             # more data from the master
             if entry['step'] > self.step:
                 self.upload_data()
+                time.sleep(UPLOAD_WAIT)
                 self.get_master_updates()
 
             # now update the skyline using this point
             self.update_skyline(entry)
         self.inputf.close()
+        self.upload_data()
+        req = requests.get(self.master_url + "/worker_done")
+        req.raise_for_status()
 
     def upload_data(self):
         """Upload the changes to the skyline to the master node"""
 
         url = self.master_url + "/update_master"
+        headers = {'content-type': 'application/json'}
+        params = {'worker_id': self.worker_id}
+        upload_data = {'step': self.step, 'data': self.skyline_updates,
+                       'worker_id': self.worker_id}
+
         # upload the data, but make sure that we try several times on failure
         for x in range(SERVER_REQUERIES):
-            req = requests.get(url, timeout=SERVER_TIMEOUT)
+            req = requests.post(url, timeout=SERVER_TIMEOUT, headers=headers,
+                                data=json.dumps(upload_data), params=params)
             if req.status_code == 200:
                 break
+            # wait a few seconds before retrying
+            time.sleep(SERVER_TIMEOUT)
         # ensure that we actually uploaded successfully
         req.raise_for_status()
 
@@ -104,23 +132,24 @@ class Worker():
         before declaring failure/ raising an exception
 
         """
+        params = {'worker_id': self.worker_id}
         for x in range(WORKER_REQUERIES):
-            url = self.master_url + "/get_skyline"
-            req = requests.get(url, timeout=SERVER_TIMEOUT)
+            url = "{}/get_skyline/{}".format(self.master_url, self.step)
+            req = requests.get(url, timeout=SERVER_TIMEOUT, params=params)
 
             # if we got a successful response, then let's break out
             if req.status_code == 200:
                 break
-            # if the computation is under way, so there is nothing for
-            # us yet, then keep waiting
+            # if currently computing or waiting for other nodes, then
+            # wait longer
             elif req.status_code == 423:
                 time.sleep(WORKER_MASTER_WAIT)
-            # otherwise, we hit an error, so break out
+            # otherwise, just break out now with an error
             else:
                 req.raise_for_status()
 
         data = req.json()
-        self.step = data['step'] + 1
+        self.step += 1
         for point in data['data']:
             self.update_skyline(point)
 
