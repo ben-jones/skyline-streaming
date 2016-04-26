@@ -7,7 +7,7 @@
 
 
 # stdlib
-# import Queue
+import Queue
 
 
 def test_skyline():
@@ -17,17 +17,15 @@ def test_skyline():
     skyline_basic(test_list)
 
 
-def skyline_basic(inputFile):
-    window = []
-    tempFile = []
-    window_size = 5
-    skylinePts = []
-    nonSkylinePts = []
-    time = 0
-    skyLinePts = skylineBNL(inputFile, window, tempFile, window_size,
-                            skylinePts, nonSkylinePts, time)
+def skyline_basic(inputs):
+    window, nonSkylinePts = Queue.Queue(), Queue.Queue()
+    tuples = Queue.Queue()
+    for item in inputs:
+        tuples.put(item)
+    skyLinePts = skylineBNL(tuples, window, nonSkylinePts)
     print "The skyline points are:"
-    for point in skyLinePts:
+    while not skyLinePts.empty():
+        point = skyLinePts.get_nowait()
         print point
 
 
@@ -40,8 +38,8 @@ def skylineBNL(in_tuples, window, nonSkylinePts):
         cur_tup = in_tuples.get_nowait()
 
         # add the tuple if there is nothing to compare to
-        if (len(window) == 0):
-            window.append(cur_tup)
+        if window.empty():
+            window.put(cur_tup)
             continue
 
         is_dominated = False
