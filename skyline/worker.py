@@ -28,7 +28,7 @@ import requests
 # local imports
 from constants import WORKER_REQUERIES, WORKER_MASTER_WAIT, SERVER_TIMEOUT
 from constants import SERVER_REQUERIES
-
+from skyline import Skyline
 
 # constants
 UPLOAD_WAIT = 5
@@ -38,6 +38,10 @@ def create_nonce(length):
     letters = [random.choice(string.letters) for x in range(length)]
     nonce = "".join(letters)
     return nonce
+
+def process_line(line):
+    entry = json.loads(line)
+    entry['data'] = tuple(entry['data'])
 
 
 class Worker():
@@ -58,8 +62,9 @@ class Worker():
         # get information about the step size
         self.verify_master()
 
-        self.skyline = []
-        self.skyline_updates = []
+        # create the skyline stuff
+        self.sky = Skyline()
+        self.old_skys = {}
 
     def verify_master(self):
         """Verify the location of the master and get the time step and size"""
@@ -69,6 +74,7 @@ class Worker():
         entry = req.json()
         self.step = entry['step']
         self.step_size = entry['step_size']
+        self.win_size = entry['step_window']
         self.start_time = entry['start_time']
         self.window_start = entry['window_time']
         self.window_end = self.window_start + self.step_size
@@ -104,12 +110,22 @@ class Worker():
         req.raise_for_status()
 
     def upload_data(self):
-        """Upload the changes to the skyline to the master node"""
+        """Upload the changes to the skyline to the master node
+
+        We will perform the following activities here:
+        1) find difference in old and new skyline (skyline updates to
+           send to master)
+        2) send data to master
+
+        """
+        # find the difference in old and new skyline (skyline updates
+        # to send to master
+        added, removed = self.find_skyline_diff()
 
         url = self.master_url + "/update_master"
         headers = {'content-type': 'application/json'}
         params = {'worker_id': self.worker_id}
-        upload_data = {'step': self.step, 'data': self.skyline_updates,
+        upload_data = {'step': self.step, 'added': added, 'removed': removed,
                        'worker_id': self.worker_id}
 
         # upload the data, but make sure that we try several times on failure
@@ -123,6 +139,20 @@ class Worker():
         # ensure that we actually uploaded successfully
         req.raise_for_status()
 
+    def find_skyline_diff(self):
+        # first compute the new skyline's set
+        skys = {}
+        while not self.sky.skyline.empty():
+            item = self.sky.skyline.get_nowait()
+            skys[tuple(item['data'])] = item
+        new_keys = set(skys.keys())
+        old_keys = set(self.old_skys.keys())
+        added = new_keys - old_keys
+        removed = old_keys - new_keys
+        added = map(lambda x: skys[x], added)
+        removed = map(lambda x: self.old_skys[x], removed)
+        return added, removed
+
     def get_master_updates(self):
         """Update the local skyline based on points from the master/central
         node's skyline
@@ -130,6 +160,10 @@ class Worker():
         To get the skyline, we will query the master server a total of
         WORKER_REQUERIES times and wait WORKER_MASTER_WAIT seconds
         before declaring failure/ raising an exception
+
+        We will perform the following activities here
+        1) update local skyline based on master updates
+        2) expire old points
 
         """
         params = {'worker_id': self.worker_id}
@@ -150,8 +184,55 @@ class Worker():
 
         data = req.json()
         self.step += 1
-        for point in data['data']:
-            self.update_skyline(point)
+
+        # handle the removals and additions in a single pass
+        to_remove, old_skys = {}, {}
+        for point in data['removed']:
+            to_remove[point['data']] = point
+
+        to_see = self.sky.skyline.qsize()
+        for idx in range(to_see):
+            point = self.sky.skyline.get_nowait()
+            if point['data'] in to_remove:
+                continue
+            self.sky.skyline.put(point)
+            old_skys[point['data']] = point
+        for point in data['added']:
+            self.sky.skyline.put(point)
+            old_skys[point['data']] = point
+
+        # now that we have the global skyline from the previous
+        # timestep, let's create a datastructure to snapshot what we
+        # will later add and remove
+        self.old_skys = old_skys
+
+        # expire points from the skyline
+        self.expire_points()
+
+    def expire_points(self):
+        """Expire old points from the skyline"""
+
+        has_expired = False
+        while not self.sky.skyline.empty():
+            item = self.sky.skyline.get_nowait()
+            if item['step'] < (self.step - self.win_size):
+                has_expired = True
+            else:
+                self.sky.skyline.put(item)
+
+        # if we have not expired any skyline points, then we don't
+        # need to check the non-skyline points and we are done
+        if not has_expired:
+            return
+
+        # rerun and expire all of the non-skyline points in a single
+        # check
+        while not self.sky.non_sky.empty():
+            item = self.sky.non_sky.get_nowait()
+            if item['step'] < (self.step - self.win_size):
+                has_expired = True
+            else:
+                self.update_skyline(item)
 
     def update_skyline(self, point):
         """Update the local skyline based on this point
@@ -161,13 +242,16 @@ class Worker():
         master
 
         """
-        pass
+        self.sky.update_sky_for_point(point)
 
 
 def run_worker(infile, master):
     worker = Worker(infile, master)
     worker.run()
 
+
+# note that we plan to operate on netflow data in a csv format. There
+# is a 10k line sample of the data in netflow.example
 
 def parse_args():
     parser = argparse.ArgumentParser(prog='skyline-worker')

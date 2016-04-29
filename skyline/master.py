@@ -19,6 +19,7 @@
 # stdlib imports
 import argparse
 import json
+import Queue
 import time
 import threading
 import traceback
@@ -34,11 +35,12 @@ app = Flask(__name__)
 
 # local imports
 from constants import MASTER_TIMEOUT_TO_END, MASTER_WAIT_TIME
+from skyline import Skyline
 
 
 class Master():
-    def __init__(self, outfile, start_time, step_size, num_workers=2,
-                 workers=None):
+    def __init__(self, outfile, start_time, step_size, win_size,
+                 num_workers=2, workers=None):
         self.outfile = outfile
         self.num_workers = num_workers
         self.skyline = []
@@ -49,6 +51,7 @@ class Master():
 
         self.start_time = start_time
         self.window_time = start_time
+        self.win_size = win_size
         self.step = 0
         self.step_size = step_size
         self.last_received_time = time.time()
@@ -61,6 +64,9 @@ class Master():
         self.status_lock = threading.Lock()
         self.data_lock = threading.Lock()
 
+        self.sky = Skyline()
+        self.skylines = {}
+
     def process_skyline(self):
         """Script to process the skyline for each new data point
 
@@ -69,10 +75,58 @@ class Master():
         2) update the global skyline from the individuals
 
         """
+        work_seen = {}
+        global_seen = {}
         try:
-            # TODO: fill this in with the global skyline computation
-            self.skyline = [self.step]
-            # time.sleep(30)
+            # update each local skyline
+            for sky in self.unprocessed_sky:
+                worker = sky['worker_id']
+                added, removed = sky['added'], sky['removed']
+                work_seen[worker] = {}
+
+                # add and remove the entries
+                if worker not in self.skylines:
+                    self.skylines[worker] = Queue.Queue()
+
+                # remove the entries we don't need
+                to_see = self.skylines[worker].qsize()
+                for idx in range(to_see):
+                    item = self.skylines[worker].get_nowait()
+                    if item in removed:
+                        continue
+                    self.skylines[worker].put(item)
+                    work_seen[worker][item['data']] = item
+                    global_seen[item['data']] = item
+
+                # and add the new entries
+                for item in added:
+                    self.skylines[worker].put(item)
+                    work_seen[worker][item['data']] = item
+                    global_seen[item['data']] = item
+
+            # now update the global skyline based on the items
+            self.sky = Skyline()
+            for key in global_seen:
+                item = global_seen[key]
+                self.sky.update_sky_for_point(item)
+
+            # snapshot the global skyline
+            skys = {}
+            while not self.sky.skyline.empty():
+                item = self.sky.skyline.get_nowait()
+                skys[item['data']] = item
+            old_keys = set(skys.keys())
+
+            # return the difference to each worker
+            for worker in work_seen:
+                new_keys = set(work_seen[worker].keys())
+                added = new_keys - old_keys
+                removed = old_keys - new_keys
+                added = map(lambda x: work_seen[worker][x], added)
+                removed = map(lambda x: skys[x], removed)
+                update = {'step': self.step, 'added': added,
+                          'removed': removed, 'worker_id': worker}
+                self.skyline_changes[worker] = update
 
             self.unprocessed_sky = []
             self.recv_workers = {}
@@ -207,7 +261,8 @@ def check_status():
 def get_step():
     data.status_lock.acquire()
     step = {'step': data.step, 'step_size': data.step_size,
-            'start_time': data.start_time, 'window_time': data.window_time}
+            'start_time': data.start_time, 'window_time': data.window_time,
+            'step_window': data.win_size}
     data.status_lock.release()
     return flask.make_response(flask.jsonify(step), 200)
 
@@ -272,7 +327,7 @@ def get_skyline(step=None):
     # otherwise return the latest skyline
     data.data_lock.acquire()
     # sky = {'step': (data.step - 1), 'data': data.skyline}
-    sky = {'step': (data.step - 1), 'data': data.unprocessed_sky}
+    sky = {'step': (data.step - 1), 'data': data.skyline_changes[worker_id]}
     data.data_lock.release()
     return flask.make_response(flask.jsonify(sky), 200)
 
@@ -323,6 +378,8 @@ def parse_args():
                         help='epoch timestamp for the start time for analysis')
     parser.add_argument('--step', required=True, type=int,
                         help='step size in seconds')
+    parser.add_argument('--win-size', required=True, type=int,
+                        help='window size (number of steps)')
     parser.add_argument('--num-workers', required=True, type=int,
                         help='number of workers to wait for')
     return parser.parse_args()
@@ -333,7 +390,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     # create appropriate global datastructures
-    data = Master(args.output, args.start, args.step,
+    data = Master(args.output, args.start, args.step, args.win_size,
                   num_workers=args.num_workers)
 
     # start the background computation thread. This thread will
