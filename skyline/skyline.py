@@ -9,6 +9,8 @@
 # stdlib
 import Queue
 
+from constants import REMOVE_DUPS
+
 
 def test_skyline():
 
@@ -43,7 +45,7 @@ class Skyline():
         for point in in_tuples:
             self.update_sky_for_point(point)
 
-    def check_dominated(self, point1, point2, remove_dups=True):
+    def check_dominated(self, point1, point2, remove_dups=REMOVE_DUPS):
         """Compare the two points to see if one dominates the other
 
         Note: a point dominates another if it has a SMALLER value
@@ -69,7 +71,10 @@ class Skyline():
         elif ((not dominates) and dominated):
             return -1
         if remove_dups and (not dominates):
-            return -1
+            if point1['step'] > point2['step']:
+                return 1
+            else:
+                return -1
         return 0
 
     def update_sky_for_point(self, point):
@@ -84,7 +89,7 @@ class Skyline():
         # add the tuple if there is nothing to compare to
         if self.skyline.empty():
             self.skyline.put(point)
-            return
+            return True
 
         is_dominated = False
         to_see = self.skyline.qsize()
