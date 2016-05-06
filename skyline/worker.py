@@ -140,13 +140,15 @@ class Worker():
         print ("Worker is now running at step {} with step_size {} starting "
                "at time {}".format(self.step, self.step_size, self.start_time))
         # read in the entries for this step
-        processed = 0
+        processed, last_proc = 0, 0
         for line in self.inputf.xreadlines():
             entry = self.process_line(line)
 
             processed += 1
-            if (processed % 1) == 0:
-                self.logger.info("Processed {} entries".format(processed))
+            last_proc += 1
+            if (processed % 1000) == 0:
+                self.logger.info("Processed {} total entries ({} after last "
+                                 "step)".format(processed, last_proc))
 
             # if we are moving beyond this timestep, then wait for
             # more data from the master
@@ -156,6 +158,7 @@ class Worker():
                                   "".format(UPLOAD_WAIT))
                 time.sleep(UPLOAD_WAIT)
                 self.get_master_updates()
+                last_proc = 0
 
             # now update the skyline using this point
             self.update_skyline(entry)
