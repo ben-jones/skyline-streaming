@@ -1,0 +1,345 @@
+Timer unit: 1e-06 s
+
+Total time: 0.566658 s
+File: /Users/ben/Development/classes/big-data-security-598/skyline-proj/skyline/skyline.py
+Function: check_dominated at line 64
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    64                                               def check_dominated(self, point1, point2, remove_dups=REMOVE_DUPS):
+    65                                                   """Compare the two points to see if one dominates the other
+    66                                           
+    67                                                   Note: a point dominates another if it has a SMALLER value
+    68                                           
+    69                                                   Return values:
+    70                                                   1 if point1 dominates point2
+    71                                                   -1 if point2 dominates point1
+    72                                                   0 if point1 and point2 are incomparable
+    73                                           
+    74                                                   """
+    75     79998        41638      0.5      7.3          dominates, dominated = False, False
+    76     79998        42255      0.5      7.5          data1, data2 = point1['data'], point2['data']
+    77     79998        47121      0.6      8.3          if len(data1) != len(data2):
+    78                                                       raise SkylineException("data points have unequal dimensions")
+    79    239994       170863      0.7     30.2          for idx in range(len(data1)):
+    80    159996        84920      0.5     15.0              if (data1[idx] > data2[idx]):
+    81     80847        36281      0.4      6.4                  dominated = True
+    82     79149        40082      0.5      7.1              elif (data1[idx] < data2[idx]):
+    83        83           42      0.5      0.0                  dominates = True
+    84                                           
+    85     79998        34062      0.4      6.0          if (dominates and (not dominated)):
+    86        83           38      0.5      0.0              return 1
+    87     79915        35333      0.4      6.2          elif ((not dominates) and dominated):
+    88     78094        31539      0.4      5.6              return -1
+    89      1821          810      0.4      0.1          if remove_dups and (not dominates):
+    90      1821          941      0.5      0.2              if point1['step'] > point2['step']:
+    91                                                           return 1
+    92                                                       else:
+    93      1821          733      0.4      0.1                  return -1
+    94                                                   return 0
+
+Total time: 3.78811 s
+File: /Users/ben/Development/classes/big-data-security-598/skyline-proj/skyline/skyline.py
+Function: update_sky_for_point at line 96
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    96                                               def update_sky_for_point(self, point):
+    97                                                   """Update the skyline for a new data point
+    98                                           
+    99                                                   Note: if add_to_updates is true, then it will add an entry to
+   100                                                   skyline updates if the data point does not appear in the
+   101                                                   skyline. This is useful if we are at the master and want to
+   102                                                   know if a point was removed or not
+   103                                           
+   104                                                   """
+   105                                                   # add the tuple if there is nothing to compare to
+   106                                                   if self.skyline.empty():
+   107                                                       self.skyline.put(point)
+   108     79999       208679      2.6      5.5              return True
+   109         1           16     16.0      0.0  
+   110         1            1      1.0      0.0          is_dominated = False
+   111                                                   to_see = self.skyline.qsize()
+   112     79998        45456      0.6      1.2          while to_see > 0:
+   113     79998       194919      2.4      5.1              cmp_tup = self.skyline.get_nowait()
+   114     80081        45089      0.6      1.2              to_see -= 1
+   115     79998       617319      7.7     16.3  
+   116     79998        47283      0.6      1.2              # if result is 1, remove the tuple from the window
+   117                                                       #
+   118                                                       # if result is -1, place the curTuple in the Non-skyline
+   119                                                       #
+   120                                                       # if result is 0, place the curTuple in the 1) window,
+   121                                                       # if place is there else in the temp file.
+   122                                                       is_dom = self.check_dominated(point, cmp_tup)
+   123                                                       if is_dom == 1:
+   124     79998      1172115     14.7     30.9                  self.non_sky.put(cmp_tup)
+   125     79998        42807      0.5      1.1              elif is_dom == 0:
+   126        83          627      7.6      0.0                  self.skyline.put(cmp_tup)
+   127     79915        42255      0.5      1.1              elif is_dom == -1:
+   128                                                           self.skyline.put(cmp_tup)
+   129     79915        42343      0.5      1.1                  self.non_sky.put(point)
+   130     79915       566493      7.1     15.0                  is_dominated = True
+   131     79915       543546      6.8     14.3                  break
+   132     79915        48025      0.6      1.3  
+   133     79915        41968      0.5      1.1          if not is_dominated:
+   134                                                       self.skyline.put(point)
+   135     79998        41358      0.5      1.1  
+   136        83          601      7.2      0.0          if RECORD_ALL:
+   137                                                       entry = {'time': time.time(), 'sky_size': self.skyline.qsize(),
+   138     79998        45320      0.6      1.2                       'comparisons': (self.skyline.qsize() - to_see),
+   139                                                                'is_dom': is_dominated}
+   140                                                       self.comp_size.write(json.dumps(entry) + "\n")
+   141                                                       cur_sky = {'time': time.time(), 'is_dom': is_dominated,
+   142                                                                  'comparisons': (self.skyline.qsize() - to_see),
+   143                                                                  'skyline': self.get_sky_as_list()}
+   144                                                       self.sky_file.write(json.dumps(cur_sky) + "\n")
+   145                                                   return not is_dominated
+
+Total time: 5.77092 s
+File: worker.py
+Function: run at line 135
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   135                                               def run(self):
+   136                                                   """Method to read in the streaming entries, process the skyline, and
+   137                                                   send results to the master
+   138                                           
+   139                                                   """
+   140         1            1      1.0      0.0          print ("Worker is now running at step {} with step_size {} starting "
+   141         1           12     12.0      0.0                 "at time {}".format(self.step, self.step_size, self.start_time))
+   142                                                   # read in the entries for this step
+   143         1            1      1.0      0.0          processed, last_proc = 0, 0
+   144         1            1      1.0      0.0          if RECORD_ALL:
+   145                                                       self.sky_size = open('skyline-size.json', 'w')
+   146                                                       self.sky.comp_size = open('sky-comp-size.json', 'w')
+   147                                                       self.sky.sky_file = open('sky-file.json', 'w')
+   148     80000        74297      0.9      1.3          for line in self.inputf.xreadlines():
+   149     79999       519842      6.5      9.0              entry = self.process_line(line)
+   150                                           
+   151     79999        69222      0.9      1.2              processed += 1
+   152     79999        59386      0.7      1.0              last_proc += 1
+   153     79999        66724      0.8      1.2              if (processed % 1000) == 0:
+   154        79          113      1.4      0.0                  self.logger.info("Processed {} total entries ({} after last "
+   155        79        13926    176.3      0.2                                   "step)".format(processed, last_proc))
+   156                                                           # write out skyline size if necessary
+   157        79           95      1.2      0.0                  if RECORD_ALL:
+   158                                                               item = {'time': time.time(), 'num_entry': processed,
+   159                                                                       'sky_size': self.sky.skyline.qsize()}
+   160                                                               self.sky_size.write(json.dumps(item) + "\n")
+   161                                                               self.sky_size.flush()
+   162                                           
+   163                                                       # if we are moving beyond this timestep, then wait for
+   164                                                       # more data from the master
+   165     79999        66411      0.8      1.2              if entry['step'] > self.step:
+   166                                                           self.upload_data()
+   167                                                           self.logger.debug("Starting to wait on upload for {}"
+   168                                                                             "".format(UPLOAD_WAIT))
+   169                                                           time.sleep(UPLOAD_WAIT)
+   170                                                           self.get_master_updates()
+   171                                                           last_proc = 0
+   172                                           
+   173                                                       # now update the skyline using this point
+   174     79999      4892209     61.2     84.8              self.update_skyline(entry)
+   175         1           11     11.0      0.0          self.inputf.close()
+   176         1            1      1.0      0.0          if RECORD_ALL:
+   177                                                       self.sky_size.close()
+   178                                                       self.sky.comp_size.close()
+   179                                                       self.sky.sky_file.close()
+   180         1         5161   5161.0      0.1          self.upload_data()
+   181         1         3500   3500.0      0.1          req = requests.get(self.master_url + "/worker_done")
+   182         1            3      3.0      0.0          req.raise_for_status()
+
+Total time: 0.005129 s
+File: worker.py
+Function: upload_data at line 184
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   184                                               def upload_data(self):
+   185                                                   """Upload the changes to the skyline to the master node
+   186                                           
+   187                                                   We will perform the following activities here:
+   188                                                   1) find difference in old and new skyline (skyline updates to
+   189                                                      send to master)
+   190                                                   2) send data to master
+   191                                           
+   192                                                   """
+   193         1          171    171.0      3.3          self.logger.debug("Starting to upload data")
+   194                                                   # find the difference in old and new skyline (skyline updates
+   195                                                   # to send to master
+   196         1          253    253.0      4.9          added, removed = self.find_skyline_diff()
+   197                                           
+   198         1            1      1.0      0.0          url = self.master_url + "/update_master"
+   199         1            0      0.0      0.0          headers = {'content-type': 'application/json'}
+   200         1            1      1.0      0.0          params = {'worker_id': self.worker_id}
+   201         1            1      1.0      0.0          upload_data = {'step': self.step, 'added': added, 'removed': removed,
+   202         1            1      1.0      0.0                         'worker_id': self.worker_id}
+   203                                           
+   204         1          127    127.0      2.5          self.logger.debug("Preparing to upload: {}".format(upload_data))
+   205                                                   # upload the data, but make sure that we try several times on failure
+   206         1            2      2.0      0.0          for x in range(SERVER_REQUERIES):
+   207         1            2      2.0      0.0              req = requests.post(url, timeout=SERVER_TIMEOUT, headers=headers,
+   208         1         4562   4562.0     88.9                                  data=json.dumps(upload_data), params=params)
+   209                                                       # self.logger.debug("Sent upload data to {}".format(url))
+   210         1            2      2.0      0.0              if req.status_code == 200:
+   211         1            2      2.0      0.0                  break
+   212                                                       # wait a few seconds before retrying
+   213                                                       time.sleep(SERVER_TIMEOUT)
+   214                                                   # ensure that we actually uploaded successfully
+   215         1            4      4.0      0.1          req.raise_for_status()
+
+Total time: 0.000226 s
+File: worker.py
+Function: find_skyline_diff at line 217
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   217                                               def find_skyline_diff(self):
+   218                                                   # first compute the new skyline's set
+   219         1            2      2.0      0.9          skys = {}
+   220         1            4      4.0      1.8          to_see = self.sky.skyline.qsize()
+   221                                                   # while not self.sky.skyline.empty():
+   222         2            2      1.0      0.9          for x in range(to_see):
+   223         1           10     10.0      4.4              item = self.sky.skyline.get_nowait()
+   224         1            1      1.0      0.4              step = tuple([item['step']])
+   225         1            2      2.0      0.9              key = tuple(item['data']) + step
+   226         1            2      2.0      0.9              skys[key] = item
+   227         1            8      8.0      3.5              self.sky.skyline.put(item)
+   228         1            3      3.0      1.3          new_keys = set(skys.keys())
+   229         1            1      1.0      0.4          old_keys = set(self.old_skys.keys())
+   230         1            2      2.0      0.9          added = new_keys - old_keys
+   231         1            0      0.0      0.0          removed = old_keys - new_keys
+   232         1            5      5.0      2.2          added = map(lambda x: skys[x], added)
+   233         1            1      1.0      0.4          removed = map(lambda x: self.old_skys[x], removed)
+   234         1            1      1.0      0.4          self.logger.debug("Skyline diff- added: {} removed: {}"
+   235         1          181    181.0     80.1                            "".format(added, removed))
+   236         1            1      1.0      0.4          return added, removed
+
+Total time: 0 s
+File: worker.py
+Function: get_master_updates at line 238
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   238                                               def get_master_updates(self):
+   239                                                   """Update the local skyline based on points from the master/central
+   240                                                   node's skyline
+   241                                           
+   242                                                   To get the skyline, we will query the master server a total of
+   243                                                   WORKER_REQUERIES times and wait WORKER_MASTER_WAIT seconds
+   244                                                   before declaring failure/ raising an exception
+   245                                           
+   246                                                   We will perform the following activities here
+   247                                                   1) update local skyline based on master updates
+   248                                                   2) expire old points
+   249                                           
+   250                                                   """
+   251                                                   self.logger.debug("Starting to get master updates")
+   252                                                   params = {'worker_id': self.worker_id}
+   253                                                   for x in range(WORKER_REQUERIES):
+   254                                                       url = "{}/get_skyline/{}".format(self.master_url, self.step)
+   255                                                       req = requests.get(url, timeout=SERVER_TIMEOUT, params=params)
+   256                                           
+   257                                                       # if we got a successful response, then let's break out
+   258                                                       if req.status_code == 200:
+   259                                                           break
+   260                                                       # if currently computing or waiting for other nodes, then
+   261                                                       # wait longer
+   262                                                       elif req.status_code == 423:
+   263                                                           self.logger.debug("Received wait command from master when "
+   264                                                                             "starting update from master")
+   265                                                           time.sleep(WORKER_MASTER_WAIT)
+   266                                                       # otherwise, just break out now with an error
+   267                                                       else:
+   268                                                           req.raise_for_status()
+   269                                           
+   270                                                   data = req.json()
+   271                                                   self.logger.debug("Receieved master update: {}".format(data))
+   272                                                   self.step += 1
+   273                                           
+   274                                                   # handle the removals and additions in a single pass
+   275                                                   to_remove, old_skys = {}, {}
+   276                                                   for point in data['removed']:
+   277                                                       to_remove[tuple(point['data'])] = point
+   278                                           
+   279                                                   to_see = self.sky.skyline.qsize()
+   280                                                   for idx in range(to_see):
+   281                                                       point = self.sky.skyline.get_nowait()
+   282                                                       if tuple(point['data']) in to_remove:
+   283                                                           continue
+   284                                                       self.sky.skyline.put(point)
+   285                                                       step = tuple([point['step']])
+   286                                                       old_skys[tuple(point['data']) + step] = point
+   287                                                   for point in data['added']:
+   288                                                       self.sky.skyline.put(point)
+   289                                                       step = tuple([point['step']])
+   290                                                       old_skys[tuple(point['data']) + step] = point
+   291                                           
+   292                                                   # now that we have the global skyline from the previous
+   293                                                   # timestep, let's create a datastructure to snapshot what we
+   294                                                   # will later add and remove
+   295                                                   self.old_skys = old_skys
+   296                                           
+   297                                                   # expire points from the skyline
+   298                                                   self.expire_points()
+
+Total time: 0 s
+File: worker.py
+Function: expire_points at line 300
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   300                                               def expire_points(self):
+   301                                                   """Expire old points from the skyline"""
+   302                                           
+   303                                                   self.logger.debug("Starting to expire points for step {}"
+   304                                                                     "(anything less than {})"
+   305                                                                     "".format(self.step, self.step - self.win_size))
+   306                                                   has_expired = False
+   307                                                   to_see = self.sky.skyline.qsize()
+   308                                                   # while not self.sky.skyline.empty():
+   309                                                   for x in range(to_see):
+   310                                                       item = self.sky.skyline.get_nowait()
+   311                                                       if item['step'] <= (self.step - self.win_size):
+   312                                                           has_expired = True
+   313                                                           # self.logger.debug("Expiring point {} at step {}"
+   314                                                           #                   "".format(item, self.step))
+   315                                                       else:
+   316                                                           self.sky.skyline.put(item)
+   317                                           
+   318                                                   # if we have not expired any skyline points, then we don't
+   319                                                   # need to check the non-skyline points and we are done
+   320                                                   if not has_expired:
+   321                                                       # self.logger.debug("No expiration points found")
+   322                                                       return
+   323                                           
+   324                                                   # rerun and expire all of the non-skyline points in a single
+   325                                                   # check
+   326                                                   to_see = self.sky.non_sky.qsize()
+   327                                                   # while not self.sky.non_sky.empty():
+   328                                                   for x in range(to_see):
+   329                                                       item = self.sky.non_sky.get_nowait()
+   330                                                       # self.logger.debug("testing non sky point: {}".format(item))
+   331                                                       if item['step'] <= (self.step - self.win_size):
+   332                                                           has_expired = True
+   333                                                       else:
+   334                                                           self.update_skyline(item)
+
+Total time: 4.73049 s
+File: worker.py
+Function: update_skyline at line 336
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   336                                               def update_skyline(self, point):
+   337                                                   """Update the local skyline based on this point
+   338                                           
+   339                                                   Note: when the skyline changes, we also need to update
+   340                                                   self.skyline_updates because that is what will be sent to the
+   341                                                   master
+   342                                           
+   343                                                   """
+   344     79999      4704626     58.8     99.5          added = self.sky.update_sky_for_point(point)
+   345     79999        25864      0.3      0.5          return added
+

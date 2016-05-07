@@ -1,0 +1,22 @@
+* problems to fix
+** worker
+*** sending updates for points that are not in the skyline
+** master
+*** what is window time and what are we doing with it?
+*** oddity-> don't update entries if they are replaced with a newer entry of the same value
+*** points don't get expired
+*** when a former skyline point is removed, it gets added right back
+*** fix the counter so that when a worker drops out, we don't include their contribution to the current skyline
+*** ensure that each worker can only contribute once to the skyline
+*** worker's data will not expire if the worker is gone
+* implementation
+** how can we check on both time and step-> could include both in the tuple
+* cases to test
+** single worker add/remove
+** multi-worker add/remove
+*** setup-> 2 workers, window of 2
+*** step 0-> each worker sends 2 skylines, but only 1 will be kept
+*** step 1-> worker 1 overtakes worker 2 skyline
+*** step 2-> worker 1 replace old entry
+** expiring points on worker
+** attempt streaming

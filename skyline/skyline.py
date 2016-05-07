@@ -7,9 +7,11 @@
 
 
 # stdlib
+import json
 import Queue
+import time
 
-from constants import REMOVE_DUPS
+from constants import REMOVE_DUPS, RECORD_ALL
 
 
 def test_skyline():
@@ -35,10 +37,24 @@ class Skyline():
     def __init__(self, skyline=None, non_sky=None):
         self.non_sky = Queue.Queue()
         self.skyline = Queue.Queue()
+        # if RECORD_ALL:
+        #     self.comp_size = open('sky-comp-size.json', 'w')
         if skyline is not None:
             self.skyline = skyline
         if non_sky is not None:
             self.non_sky = non_sky
+
+    def get_sky_as_list(self):
+        """Get the skyline as a list (troubleshooting function)"""
+
+        to_see = self.skyline.qsize() - 1
+        sky = []
+        while to_see > 0:
+            to_see -= 1
+            item = self.skyline.get_nowait()
+            self.skyline.put(item)
+            sky.append(item)
+        return sky
 
     def compute_all_sky(self, in_tuples):
         """Compute the skyline from a full set of data points"""
@@ -117,6 +133,15 @@ class Skyline():
         if not is_dominated:
             self.skyline.put(point)
 
+        if RECORD_ALL:
+            entry = {'time': time.time(), 'sky_size': self.skyline.qsize(),
+                     'comparisons': (self.skyline.qsize() - to_see),
+                     'is_dom': is_dominated}
+            self.comp_size.write(json.dumps(entry) + "\n")
+            cur_sky = {'time': time.time(), 'is_dom': is_dominated,
+                       'comparisons': (self.skyline.qsize() - to_see),
+                       'skyline': self.get_sky_as_list()}
+            self.sky_file.write(json.dumps(cur_sky) + "\n")
         return not is_dominated
 
     def reset_updates(self):
