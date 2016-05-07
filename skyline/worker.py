@@ -25,11 +25,11 @@ import time
 
 # non stdlib imports
 import requests
-
+import line_profiler
 
 # local imports
 from constants import WORKER_REQUERIES, WORKER_MASTER_WAIT, SERVER_TIMEOUT
-from constants import SERVER_REQUERIES
+from constants import SERVER_REQUERIES, RECORD_ALL
 from skyline import Skyline
 
 # constants
@@ -55,12 +55,12 @@ def proc_dur_count(line):
 
     """
     parts = line.split(",")
-    dur, count = parts[0], parts[22]
+    dur, count = int(parts[0]), int(parts[22])
     # we are now looking for the minimum duration and the max count,
     # so subtract from the max count value
-    count = 1000 - count
-    item = {'step': 0, 'data': tuple([dur, count]), 'dur': dur, 'count': count,
-            'class': parts[-1]}
+    min_cnt = 1000 - count
+    item = {'step': 0, 'data': tuple([dur, min_cnt]), 'dur': dur,
+            'count': count, 'class': parts[-1]}
     return item
 
 
@@ -72,7 +72,7 @@ def proc_dur_srv_count(line):
 
     """
     parts = line.split(",")
-    dur, srv = parts[0], parts[23]
+    dur, srv = int(parts[0]), int(parts[23])
     # we are now looking for the minimum duration and the max count,
     # so subtract from the max count value
     srv = 1000 - srv
@@ -141,6 +141,10 @@ class Worker():
                "at time {}".format(self.step, self.step_size, self.start_time))
         # read in the entries for this step
         processed, last_proc = 0, 0
+        if RECORD_ALL:
+            self.sky_size = open('skyline-size.json', 'w')
+            self.sky.comp_size = open('sky-comp-size.json', 'w')
+            self.sky.sky_file = open('sky-file.json', 'w')
         for line in self.inputf.xreadlines():
             entry = self.process_line(line)
 
@@ -149,6 +153,12 @@ class Worker():
             if (processed % 1000) == 0:
                 self.logger.info("Processed {} total entries ({} after last "
                                  "step)".format(processed, last_proc))
+                # write out skyline size if necessary
+                if RECORD_ALL:
+                    item = {'time': time.time(), 'num_entry': processed,
+                            'sky_size': self.sky.skyline.qsize()}
+                    self.sky_size.write(json.dumps(item) + "\n")
+                    self.sky_size.flush()
 
             # if we are moving beyond this timestep, then wait for
             # more data from the master
@@ -163,6 +173,10 @@ class Worker():
             # now update the skyline using this point
             self.update_skyline(entry)
         self.inputf.close()
+        if RECORD_ALL:
+            self.sky_size.close()
+            self.sky.comp_size.close()
+            self.sky.sky_file.close()
         self.upload_data()
         req = requests.get(self.master_url + "/worker_done")
         req.raise_for_status()
@@ -207,7 +221,8 @@ class Worker():
         # while not self.sky.skyline.empty():
         for x in range(to_see):
             item = self.sky.skyline.get_nowait()
-            key = tuple(item['data'] + [item['step']])
+            step = tuple([item['step']])
+            key = tuple(item['data']) + step
             skys[key] = item
             self.sky.skyline.put(item)
         new_keys = set(skys.keys())
@@ -267,10 +282,12 @@ class Worker():
             if tuple(point['data']) in to_remove:
                 continue
             self.sky.skyline.put(point)
-            old_skys[tuple(point['data'] + [point['step']])] = point
+            step = tuple([point['step']])
+            old_skys[tuple(point['data']) + step] = point
         for point in data['added']:
             self.sky.skyline.put(point)
-            old_skys[tuple(point['data'] + [point['step']])] = point
+            step = tuple([point['step']])
+            old_skys[tuple(point['data']) + step] = point
 
         # now that we have the global skyline from the previous
         # timestep, let's create a datastructure to snapshot what we
@@ -331,13 +348,23 @@ class Worker():
 
 
 def run_worker(infile, master, work_id=None):
-    worker = Worker(infile, master, work_id=work_id)
+    worker = Worker(infile, master, work_id=work_id,
+                    process_line=proc_dur_count)
+    prof = line_profiler.LineProfiler(worker.run, worker.upload_data,
+                                      worker.find_skyline_diff,
+                                      worker.get_master_updates,
+                                      worker.expire_points,
+                                      worker.update_skyline,
+                                      worker.sky.update_sky_for_point,
+                                      worker.sky.check_dominated)
+    prof.enable()
     worker.run()
+    prof.disable()
+    prof.dump_stats("worker.prof")
 
 
 # note that we plan to operate on netflow data in a csv format. There
 # is a 10k line sample of the data in netflow.example
-
 def parse_args():
     parser = argparse.ArgumentParser(prog='skyline-worker')
     parser.add_argument('--input', required=True,
